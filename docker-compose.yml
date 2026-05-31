@@ -1,0 +1,147 @@
+services:
+
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    environment:
+      POSTGRES_DB: bookstore
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: "admin"
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - bookstore-net
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U admin -d bookstore" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      # Node bilgileri
+      KAFKA_NODE_ID: 1
+      # KRaft rolleri
+      KAFKA_PROCESS_ROLES: broker,controller
+      # Controller quorum
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      # Listener ayarları
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092   #localhost kaldır kafka yaz
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Tek broker için
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # Cluster ID gerekli
+      CLUSTER_ID: lFG9_d1DR9C36RjEenYhqg
+    networks:
+      - bookstore-net
+    healthcheck:
+      test: [ "CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list" ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  eureka-server:
+    image: ahmetsnl/bookstore-eureka-server:latest
+    container_name: eureka-server
+    ports:
+      - "8761:8761"
+    networks:
+      - bookstore-net
+
+  api-gateway:
+    image: ahmetsnl/bookstore-api-gateway:latest
+    container_name: api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka
+    depends_on:
+      eureka-server:
+        condition: service_started
+    networks:
+      - bookstore-net
+
+  user-service:
+    image: ahmetsnl/bookstore-user-service:latest
+    container_name: user-service
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/bookstore
+      SPRING_DATASOURCE_USERNAME: admin
+      SPRING_DATASOURCE_PASSWORD: "admin"
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka
+    depends_on:
+      postgres:
+        condition: service_healthy
+      eureka-server:
+        condition: service_started
+    networks:
+      - bookstore-net
+
+  book-service:
+    image: ahmetsnl/bookstore-book-service:latest
+    container_name: book-service
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/bookstore
+      SPRING_DATASOURCE_USERNAME: admin
+      SPRING_DATASOURCE_PASSWORD: "admin"
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      eureka-server:
+        condition: service_started
+    networks:
+      - bookstore-net
+
+  order-service:
+    image: ahmetsnl/bookstore-order-service:latest
+    container_name: order-service
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/bookstore
+      SPRING_DATASOURCE_USERNAME: admin
+      SPRING_DATASOURCE_PASSWORD: "admin"
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      eureka-server:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+    networks:
+      - bookstore-net
+
+  notification-service:
+    image: ahmetsnl/bookstore-notification-service:latest
+    container_name: notification-service
+    environment:
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+    depends_on:
+      eureka-server:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+    networks:
+      - bookstore-net
+
+volumes:
+  postgres-data:
+
+networks:
+  bookstore-net:
+    driver: bridge
